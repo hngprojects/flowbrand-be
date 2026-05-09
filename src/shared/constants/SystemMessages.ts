@@ -116,3 +116,17 @@ export const TOPIC_NOT_FOUND = `Help center topic with ID not found`;
 export const TOPIC_UPDATE_SUCCESS = 'Topic updated successfully';
 export const TOPIC_DELETED = 'Topic deleted successfully';
 export const BILLING_PLAN_NOT_FOUND = 'Billing plan not found';
+
+export const REDIS_MESSAGES = {
+  CONNECT_SUCCESS: 'Redis connection established',
+  CLIENT_READY: 'Redis client ready',
+  CONNECTION_CLOSED: 'Redis connection closed',
+  RETRY_LIMIT_REACHED: (times: number) => `Redis retry limit reached after ${times} attempts.`,
+  RECONNECT_ATTEMPT: (times: number, delay: number) => `Redis reconnect attempt #${times} in ${delay}ms`,
+  INITIAL_CONNECTION_FAILED:
+    'Redis initial connection failed. App will continue; Redis-dependent features may degrade.',
+  CRITICAL_OOM: 'CRITICAL: Redis out of memory.',
+  CLIENT_ERROR: 'Redis client error',
+  PATTERN_DELETE_SUCCESS: (count: number, pattern: string) =>
+    `delByPattern: deleted ${count} keys matching [${pattern}]`,
+};

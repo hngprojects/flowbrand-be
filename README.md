@@ -46,7 +46,7 @@ Before you begin, ensure you have the following installed on your machine:
 
 ## Getting Started
 
-#### If you don't have git on your machine, [install it](https://docs.github.com/en/get-started/quickstart/set-up-git).
+#### If you don't have git on your machine, [install it](https://docs.github.com/en/get-started/quickstart/set-up-git)
 
 ## Fork this repository
 
@@ -106,7 +106,7 @@ Make your changes to the codebase. Ensure your code follows the project's coding
 Run the existing tests to ensure your changes do not break anything. If you added new functionality, write corresponding tests.
 
 ```sh
-npm run test
+yarn test
 ```
 
 ## commit those changes
@@ -133,9 +133,11 @@ replacing `your-branch-name` with the name of the branch you created earlier.
 <summary> <strong>If you get any errors while pushing, click here:</strong> </summary>
 
 - ### Authentication Error
+
      <pre>remote: Support for password authentication was removed on August 13, 2021. Please use a personal access token instead.
   remote: Please see https://github.blog/2020-12-15-token-authentication-requirements-for-git-operations/ for more information.
   fatal: Authentication failed for 'https://github.com/<your-username>/first-contributions.git/'</pre>
+
   Go to [GitHub's tutorial](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account) on generating and configuring an SSH key to your account.
 
 </details>
@@ -168,7 +170,7 @@ cd [app-name]
 Navigate to the project directory and install the required dependencies.
 
 ```sh
-npm install
+yarn install
 ```
 
 ### 3. Configure Environment Variables
@@ -186,7 +188,7 @@ Edit the `.env` file to match your environment configuration.
 Compile the TypeScript code to JavaScript.
 
 ```sh
-npm run build
+yarn build
 ```
 
 ### 5. Run the Development Server
@@ -194,7 +196,7 @@ npm run build
 Start the development server with the following command. This will also watch for any changes in your code and automatically restart the server.
 
 ```sh
-npm run dev
+yarn dev
 ```
 
 ### 6. Run the Production Server
@@ -202,7 +204,7 @@ npm run dev
 To run the application in a production environment, use the following command:
 
 ```sh
-npm run start
+yarn start
 ```
 
 ### 7. Verify the Setup
@@ -234,13 +236,13 @@ Here's an overview of the project's folder structure:
 
 ## Scripts
 
-Here are some useful npm scripts that you can use during development and production:
+Here are some useful yarn scripts that you can use during development and production:
 
-- `npm run build`: Compiles the TypeScript code to JavaScript.
-- `npm run start:dev`: Starts the development server with live reloading.
-- `npm run start`: Starts the production server.
-- `npm run test`: Runs the test suite (if available).
-- `npm run lint`: Runs the linter to check for code style issues.
+- `yarn build`: Compiles the TypeScript code to JavaScript.
+- `yarn start:dev`: Starts the development server with live reloading.
+- `yarn start`: Starts the production server.
+- `yarn test`: Runs the test suite (if available).
+- `yarn lint`: Runs the linter to check for code style issues.
 
 ## Additional Resources
 
@@ -268,10 +270,10 @@ To import the API documentation into Postman:
 http://localhost:3000/api/docs-json
 ```
 
-2. In Postman:
+1. In Postman:
    - Click on "Import" in the top left corner
    - Select "Link" tab
-   - Paste the Swagger JSON URL (http://localhost:3000/api/docs-json)
+   - Paste the Swagger JSON URL (<http://localhost:3000/api/docs-json>)
    - Click "Continue" and then "Import"
 
 This will create a new collection in Postman with all available API endpoints, making it easier to test and interact with the API.

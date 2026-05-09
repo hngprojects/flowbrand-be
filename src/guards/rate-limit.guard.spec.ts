@@ -1,14 +1,7 @@
-import * as dotenv from 'dotenv';
-import { ModuleRef } from '@nestjs/core';
-import { ExecutionContext, HttpException } from '@nestjs/common';
-import { afterEach, beforeAll, beforeEach, describe, expect, jest, test } from '@jest/globals';
-import type { RateLimitGuard as RateLimitGuardType } from './rate-limit.guard';
-
-dotenv.config();
-
-// Load after env is available so the guard reads .env values at import time.
-
-let RateLimitGuard: typeof RateLimitGuardType;
+import { ExecutionContext, HttpStatus } from '@nestjs/common';
+import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, jest, test } from '@jest/globals';
+import type { RedisService } from '@modules/redis/services/redis.service';
+import { RateLimitGuard } from './rate-limit.guard';
 
 function makeContext(req: any, res: any): ExecutionContext {
   return {
@@ -18,23 +11,63 @@ function makeContext(req: any, res: any): ExecutionContext {
   } as unknown as ExecutionContext;
 }
 
-describe('RateLimitGuard (in-memory fallback)', () => {
-  let guard: RateLimitGuardType;
-  beforeAll(async () => {
+/** In-memory stand-in for Redis INCR/EXPIRE/TTL behavior (tests only). */
+function createRedisMock(defaultTtl = 60): RedisService {
+  const keys = new Map<string, { count: number; ttl: number }>();
+  return {
+    incr: jest.fn(async (key: string) => {
+      let e = keys.get(key);
+      if (!e) {
+        e = { count: 0, ttl: defaultTtl };
+        keys.set(key, e);
+      }
+      e.count += 1;
+      return e.count;
+    }),
+    expire: jest.fn(async (key: string, sec: number) => {
+      const e = keys.get(key);
+      if (e) e.ttl = sec;
+      return true;
+    }),
+    ttl: jest.fn(async (key: string) => {
+      const e = keys.get(key);
+      return e ? e.ttl : -2;
+    }),
+  } as unknown as RedisService;
+}
+
+describe('RateLimitGuard (Redis)', () => {
+  let guard: RateLimitGuard;
+  const oldEnv: Record<string, string | undefined> = {};
+
+  beforeAll(() => {
+    oldEnv.RATE_LIMIT_GLOBAL = process.env.RATE_LIMIT_GLOBAL;
+    oldEnv.RATE_LIMIT_WINDOW_SEC = process.env.RATE_LIMIT_WINDOW_SEC;
+    oldEnv.RATE_LIMIT_SENSITIVE = process.env.RATE_LIMIT_SENSITIVE;
+    oldEnv.RATE_LIMIT_SENSITIVE_WINDOW_SEC = process.env.RATE_LIMIT_SENSITIVE_WINDOW_SEC;
+    oldEnv.TRUSTED_PROXIES = process.env.TRUSTED_PROXIES;
+
     process.env.RATE_LIMIT_GLOBAL = '2';
     process.env.RATE_LIMIT_WINDOW_SEC = '60';
     process.env.RATE_LIMIT_SENSITIVE = '1';
     process.env.RATE_LIMIT_SENSITIVE_WINDOW_SEC = '60';
-    ({ RateLimitGuard } = await import('./rate-limit.guard'));
+    process.env.TRUSTED_PROXIES = '';
+  });
+
+  afterAll(() => {
+    process.env.RATE_LIMIT_GLOBAL = oldEnv.RATE_LIMIT_GLOBAL;
+    process.env.RATE_LIMIT_WINDOW_SEC = oldEnv.RATE_LIMIT_WINDOW_SEC;
+    process.env.RATE_LIMIT_SENSITIVE = oldEnv.RATE_LIMIT_SENSITIVE;
+    process.env.RATE_LIMIT_SENSITIVE_WINDOW_SEC = oldEnv.RATE_LIMIT_SENSITIVE_WINDOW_SEC;
+    process.env.TRUSTED_PROXIES = oldEnv.TRUSTED_PROXIES;
   });
 
   beforeEach(() => {
-    const moduleRef = { get: jest.fn().mockReturnValue(undefined) } as unknown as ModuleRef;
-    guard = new RateLimitGuard(moduleRef);
+    guard = new RateLimitGuard(createRedisMock(60));
   });
 
   afterEach(() => {
-    jest.resetAllMocks();
+    jest.restoreAllMocks();
   });
 
   test('enforces global per-IP limit and sets headers', async () => {
@@ -45,7 +78,16 @@ describe('RateLimitGuard (in-memory fallback)', () => {
 
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
-    await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(HttpException);
+
+    const outcome1 = await Promise.resolve(guard.canActivate(ctx)).then(
+      v => ({ v }),
+      e => ({ e })
+    );
+    if ('e' in outcome1) {
+      expect((outcome1.e as { getStatus(): number }).getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS);
+    } else {
+      throw new Error('Expected rate limit to trigger (HttpException)');
+    }
 
     expect(res.setHeader).toHaveBeenCalled();
   });
@@ -63,7 +105,16 @@ describe('RateLimitGuard (in-memory fallback)', () => {
     const ctx = makeContext(req, res);
 
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
-    await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(HttpException);
+
+    const outcome2 = await Promise.resolve(guard.canActivate(ctx)).then(
+      v => ({ v }),
+      e => ({ e })
+    );
+    if ('e' in outcome2) {
+      expect((outcome2.e as { getStatus(): number }).getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS);
+    } else {
+      throw new Error('Expected sensitive rate limit to trigger (HttpException)');
+    }
 
     expect(res.setHeader).toHaveBeenCalled();
   });

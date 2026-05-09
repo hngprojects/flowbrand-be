@@ -1,80 +1,52 @@
 import { Injectable, CanActivate, ExecutionContext, HttpException, HttpStatus, Logger } from '@nestjs/common';
-import { ModuleRef } from '@nestjs/core';
+import { RedisService } from '@modules/redis/services/redis.service';
 
-type RedisLike = {
-  incr(key: string): Promise<number>;
-  ttl(key: string): Promise<number>;
-  expire(key: string, seconds: number): Promise<number>;
-};
-
-const DEFAULT_GLOBAL_LIMIT = Number(process.env.RATE_LIMIT_GLOBAL) || 100;
-const DEFAULT_WINDOW_SEC = Number(process.env.RATE_LIMIT_WINDOW_SEC) || 15 * 60;
-const DEFAULT_SENSITIVE_LIMIT = Number(process.env.RATE_LIMIT_SENSITIVE) || 5;
-const SENSITIVE_WINDOW_SEC = Number(process.env.RATE_LIMIT_SENSITIVE_WINDOW_SEC) || 15 * 60;
-
+/**
+ * RateLimitGuard
+ *
+ * - Uses the application Redis (RedisService) for counters and TTLs.
+ * - If Redis operations fail, responds with 503 so limits are not silently bypassed.
+ * - Env values are read at runtime (via getters) so tests can set `process.env` before use.
+ * - Adds standard X-RateLimit headers and `Retry-After` on 429 responses.
+ */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
   private readonly logger = new Logger(RateLimitGuard.name);
-  private redisClient: RedisLike | null = null;
-  private readonly inMemory = new Map<string, { count: number; reset: number }>();
 
-  constructor(private readonly moduleRef: ModuleRef) {}
+  constructor(private readonly redis: RedisService) {}
 
-  private async ensureRedis(): Promise<void> {
-    if (this.redisClient) return;
-    try {
-      const candidates = ['REDIS', 'REDIS_CLIENT', 'RedisService', 'IoredisClient'];
-      for (const token of candidates) {
-        try {
-          // @ts-ignore
-          const client = this.moduleRef.get(token, { strict: false });
-          if (client) {
-            this.redisClient = client as RedisLike;
-            this.logger.log(`RateLimitGuard: using Redis provider "${token}"`);
-            return;
-          }
-        } catch (err) {
-          // ignore and try next
-        }
-      }
-      this.logger.warn('RateLimitGuard: no Redis provider found; using in-memory fallback (non-persistent)');
-    } catch (err) {
-      this.logger.error('RateLimitGuard: error while trying to resolve Redis client', err as any);
-      this.redisClient = null;
-    }
+  private get globalLimit(): number {
+    return Number(process.env.RATE_LIMIT_GLOBAL) || 100;
   }
 
-  private async incrementKey(
-    key: string,
-    windowSec: number
-  ): Promise<{ count: number; ttl: number; usingRedis: boolean }> {
-    await this.ensureRedis();
-    if (this.redisClient) {
-      try {
-        const count = await this.redisClient.incr(key);
-        if (count === 1) {
-          await this.redisClient.expire(key, windowSec);
-        }
-        let ttl = await this.redisClient.ttl(key);
-        if (ttl < 0) ttl = windowSec;
-        return { count, ttl, usingRedis: true };
-      } catch (err) {
-        this.logger.error('RateLimitGuard: Redis error, falling back to in-memory (fail-open)', err as any);
-        this.redisClient = null;
+  private get windowSec(): number {
+    return Number(process.env.RATE_LIMIT_WINDOW_SEC) || 15 * 60;
+  }
+
+  private get sensitiveLimit(): number {
+    return Number(process.env.RATE_LIMIT_SENSITIVE) || 5;
+  }
+
+  private get sensitiveWindowSec(): number {
+    return Number(process.env.RATE_LIMIT_SENSITIVE_WINDOW_SEC) || 15 * 60;
+  }
+
+  private async incrementKey(key: string, windowSec: number): Promise<{ count: number; ttl: number }> {
+    const count = await this.redis.incr(key);
+    if (count === null) {
+      this.logger.error(`RateLimitGuard: Redis INCR failed for key ${key}`);
+      throw new HttpException('Rate limiting temporarily unavailable', HttpStatus.SERVICE_UNAVAILABLE);
+    }
+    if (count === 1) {
+      const ok = await this.redis.expire(key, windowSec);
+      if (!ok) {
+        this.logger.error(`RateLimitGuard: Redis EXPIRE failed for key ${key}`);
+        throw new HttpException('Rate limiting temporarily unavailable', HttpStatus.SERVICE_UNAVAILABLE);
       }
     }
-
-    const now = Date.now();
-    const cur = this.inMemory.get(key);
-    if (!cur || cur.reset <= now) {
-      const reset = now + windowSec * 1000;
-      this.inMemory.set(key, { count: 1, reset });
-      return { count: 1, ttl: windowSec, usingRedis: false };
-    }
-    cur.count += 1;
-    this.inMemory.set(key, cur);
-    const ttl = Math.max(0, Math.ceil((cur.reset - now) / 1000));
-    return { count: cur.count, ttl, usingRedis: false };
+    const rawTtl = await this.redis.ttl(key);
+    const ttl = typeof rawTtl === 'number' && rawTtl >= 0 ? rawTtl : windowSec;
+    return { count, ttl };
   }
 
   private getIpFromRequest(req: any): string {
@@ -104,21 +76,26 @@ export class RateLimitGuard implements CanActivate {
     const ip = this.getIpFromRequest(req) || 'unknown';
 
     const ipKey = `ratelimit:ip:${ip}:global`;
-    const global = await this.incrementKey(ipKey, DEFAULT_WINDOW_SEC);
-    const globalRemaining = Math.max(0, DEFAULT_GLOBAL_LIMIT - global.count);
+    const global = await this.incrementKey(ipKey, this.windowSec);
+    const globalRemaining = Math.max(0, this.globalLimit - global.count);
     const nowSec = Math.floor(Date.now() / 1000);
     const globalReset = nowSec + global.ttl;
+
     try {
-      res.setHeader('X-RateLimit-Limit', String(DEFAULT_GLOBAL_LIMIT));
+      res.setHeader('X-RateLimit-Limit', String(this.globalLimit));
       res.setHeader('X-RateLimit-Remaining', String(globalRemaining));
       res.setHeader('X-RateLimit-Reset', String(globalReset));
-    } catch (err) {
-      // ignore
+    } catch {
+      /* ignore header errors */
     }
 
-    if (global.count > DEFAULT_GLOBAL_LIMIT) {
+    if (global.count > this.globalLimit) {
       const retryAfter = global.ttl;
-      res.setHeader('Retry-After', String(retryAfter));
+      try {
+        res.setHeader('Retry-After', String(retryAfter));
+      } catch {
+        /* ignore header errors */
+      }
       throw new HttpException('Too Many Requests', HttpStatus.TOO_MANY_REQUESTS);
     }
 
@@ -127,25 +104,29 @@ export class RateLimitGuard implements CanActivate {
     if (isSensitive) {
       const body = req.body || {};
       const email = (body.email || body.username || body.identifier || '').toString().toLowerCase().trim();
-      const sensitiveKeyBase = email ? `ratelimit:${email}` : `ratelimit:ip:${ip}`;
+      const sensitiveKeyBase = email ? `ratelimit:email:${email}` : `ratelimit:ip:${ip}`;
       const action = path.split('/').pop() || 'login';
       const sensitiveKey = `${sensitiveKeyBase}:${action}`;
 
-      const sensitive = await this.incrementKey(sensitiveKey, SENSITIVE_WINDOW_SEC);
-      const sensitiveRemaining = Math.max(0, DEFAULT_SENSITIVE_LIMIT - sensitive.count);
+      const sensitive = await this.incrementKey(sensitiveKey, this.sensitiveWindowSec);
+      const sensitiveRemaining = Math.max(0, this.sensitiveLimit - sensitive.count);
       const sensitiveReset = nowSec + sensitive.ttl;
 
       try {
-        res.setHeader('X-RateLimit-Limit-Email', String(DEFAULT_SENSITIVE_LIMIT));
+        res.setHeader('X-RateLimit-Limit-Email', String(this.sensitiveLimit));
         res.setHeader('X-RateLimit-Remaining-Email', String(sensitiveRemaining));
         res.setHeader('X-RateLimit-Reset-Email', String(sensitiveReset));
-      } catch (err) {
-        // ignore
+      } catch {
+        /* ignore header errors */
       }
 
-      if (sensitive.count > DEFAULT_SENSITIVE_LIMIT) {
+      if (sensitive.count > this.sensitiveLimit) {
         const retryAfter = sensitive.ttl;
-        res.setHeader('Retry-After', String(retryAfter));
+        try {
+          res.setHeader('Retry-After', String(retryAfter));
+        } catch {
+          /* ignore header errors */
+        }
         throw new HttpException('Too Many Requests', HttpStatus.TOO_MANY_REQUESTS);
       }
     }
