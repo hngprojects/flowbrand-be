@@ -8,6 +8,8 @@ import RegistrationController from './auth.controller';
 import AuthenticationService from './auth.service';
 import { AuthMetadata } from './entities/auth-metadata.entity';
 import { UserSession } from './entities/user-session.entity';
+import { RedisModule } from '@modules/redis/redis.module';
+import { EmailModule } from '@modules/email/email.module';
 import type { StringValue } from 'ms';
 
 const expiry = authConfig().jwtExpiry;
@@ -17,6 +19,8 @@ const expiry = authConfig().jwtExpiry;
   imports: [
     TypeOrmModule.forFeature([User, AuthMetadata, UserSession]),
     PassportModule,
+    RedisModule,
+    EmailModule,
     JwtModule.register({
       global: true,
       secret: authConfig().jwtSecret,
