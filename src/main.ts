@@ -51,6 +51,7 @@ async function bootstrap() {
   await app.listen(port);
 
   logger.log({ message: 'server started 🚀', port, url: `http://localhost:${port}/api/v1` });
+  console.log('Sample PR for review process check');
 }
 bootstrap().catch(err => {
   console.error('Error during bootstrap', err);
