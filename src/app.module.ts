@@ -29,6 +29,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { ApiStatusModule } from '@modules/api-status/api-status.module';
 import s3Config from '@config/s3.config';
+import { RateLimitGuard } from '@guards/rate-limit.guard';
 
 @Module({
   providers: [
@@ -47,6 +48,10 @@ import s3Config from '@config/s3.config';
     {
       provide: 'APP_GUARD',
       useClass: AuthGuard,
+    },
+    {
+      provide: 'APP_GUARD',
+      useClass: RateLimitGuard,
     },
   ],
   imports: [
