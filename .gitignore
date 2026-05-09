@@ -431,5 +431,3 @@ docker-compose.yml
 data/
 .dev.env
 
-temp_auto_push.bat
-temp_interactive_push.bat

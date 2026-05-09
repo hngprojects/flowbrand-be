@@ -8,7 +8,9 @@ import RegistrationController from './auth.controller';
 import AuthenticationService from './auth.service';
 import { AuthMetadata } from './entities/auth-metadata.entity';
 import { UserSession } from './entities/user-session.entity';
+import type { StringValue } from 'ms';
 
+const expiry = authConfig().jwtExpiry;
 @Module({
   controllers: [RegistrationController],
   providers: [AuthenticationService],
@@ -18,7 +20,9 @@ import { UserSession } from './entities/user-session.entity';
     JwtModule.register({
       global: true,
       secret: authConfig().jwtSecret,
-      signOptions: { expiresIn: `${authConfig().jwtExpiry}s` },
+      signOptions: {
+        expiresIn: `${expiry}` as unknown as StringValue,
+      },
     }),
   ],
   exports: [TypeOrmModule],

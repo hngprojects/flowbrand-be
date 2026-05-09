@@ -1,5 +1,5 @@
 import { MailerModule } from '@nestjs-modules/mailer';
-import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
+// import { HandlebarsAdapter } from '@nestjs-modules/mailer';
 import { BullModule } from '@nestjs/bull';
 import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -29,6 +29,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { ApiStatusModule } from '@modules/api-status/api-status.module';
 import s3Config from '@config/s3.config';
+import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter';
 import { RateLimitGuard } from '@guards/rate-limit.guard';
 
 @Module({

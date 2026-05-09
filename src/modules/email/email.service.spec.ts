@@ -5,7 +5,7 @@ import QueueService, { MailSender } from './queue.service';
 import { getQueueToken } from '@nestjs/bull';
 import { createTemplateDto, getTemplateDto, UpdateTemplateDto } from './dto/email.dto';
 import * as Handlebars from 'handlebars';
-import * as htmlValidator from 'html-validator';
+import { HtmlValidate } from 'html-validate';
 import * as fs from 'fs';
 import { HttpStatus } from '@nestjs/common';
 import { createFile, deleteFile, getFile } from '@shared/helpers/fileHelpers';
@@ -32,7 +32,16 @@ jest.mock('handlebars', () => ({
   ),
 }));
 
-jest.mock('html-validator');
+let mockValidateString = jest.fn();
+jest.mock('html-validate', () => {
+  return {
+    HtmlValidate: jest.fn().mockImplementation(() => {
+      return {
+        validateString: mockValidateString,
+      };
+    }),
+  };
+});
 jest.mock('fs', () => {
   const originalModule = jest.requireActual('fs');
   return {
@@ -60,6 +69,7 @@ describe('EmailService', () => {
   };
 
   beforeEach(async () => {
+    mockValidateString.mockReset();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EmailService,
@@ -114,7 +124,7 @@ describe('EmailService', () => {
   describe('createTemplate', () => {
     it('should create a template if HTML is valid', async () => {
       const templateInfo: createTemplateDto = { templateName: 'test', template: '<div></div>' };
-      (htmlValidator as jest.Mock).mockResolvedValue({ messages: [] });
+      mockValidateString.mockReturnValue({ results: [{ messages: [] }] });
       (createFile as jest.Mock).mockResolvedValue(Promise.resolve());
 
       const result = await service.createTemplate(templateInfo);
@@ -129,7 +139,7 @@ describe('EmailService', () => {
 
     it('should return validation errors if HTML is invalid', async () => {
       const templateInfo: createTemplateDto = { templateName: 'test', template: '<div></div>' };
-      (htmlValidator as jest.Mock).mockResolvedValue({ messages: [{ message: 'Invalid HTML', type: 'error' }] });
+      mockValidateString.mockReturnValue({ results: [{ messages: [{ message: 'Invalid HTML', severity: 2 }] }] });
 
       const result = await service.createTemplate(templateInfo);
 
@@ -142,7 +152,9 @@ describe('EmailService', () => {
 
     it('should handle errors during template creation', async () => {
       const templateInfo: createTemplateDto = { templateName: 'test', template: '<div></div>' };
-      (htmlValidator as jest.Mock).mockRejectedValue(new Error('Validation error'));
+      mockValidateString.mockImplementation(() => {
+        throw new Error('Validation error');
+      });
 
       const result = await service.createTemplate(templateInfo);
 
@@ -162,9 +174,9 @@ describe('EmailService', () => {
 
       const compiledTemplate = '<!DOCTYPE html><html><head><title>Test</title></head><body>Hello, World!</body></html>';
       (Handlebars.compile as jest.Mock).mockReturnValue(() => compiledTemplate);
-      const validationResult = { messages: [] };
+      const validationResult = { results: [{ messages: [] }] };
 
-      (htmlValidator as jest.Mock).mockResolvedValue(validationResult);
+      mockValidateString.mockReturnValue(validationResult);
 
       const fsWriteFileMock = jest.fn().mockResolvedValue(undefined);
 
@@ -173,7 +185,7 @@ describe('EmailService', () => {
 
       const result = await service.updateTemplate(templateName, templateInfo);
 
-      expect(htmlValidator).toHaveBeenCalledWith({ data: compiledTemplate });
+      expect(mockValidateString).toHaveBeenCalledWith(compiledTemplate);
       expect(fsWriteFileMock).toHaveBeenCalledWith(
         `./src/modules/email/templates/${templateName}.hbs`,
         compiledTemplate,
@@ -197,14 +209,14 @@ describe('EmailService', () => {
 
       const compiledTemplate = Handlebars.compile(templateInfo.template)({});
       const validationResult = {
-        messages: [{ message: 'Invalid HTML', type: 'error' }],
+        results: [{ messages: [{ message: 'Invalid HTML', severity: 2 }] }],
       };
 
-      (htmlValidator as jest.Mock).mockResolvedValue(validationResult);
+      mockValidateString.mockReturnValue(validationResult);
 
       await expect(service.updateTemplate(templateName, templateInfo)).rejects.toThrow(CustomHttpException);
 
-      expect(htmlValidator).toHaveBeenCalledWith({ data: compiledTemplate });
+      expect(mockValidateString).toHaveBeenCalledWith(compiledTemplate);
     });
 
     it('should throw an error if template does not exist', async () => {
@@ -213,6 +225,7 @@ describe('EmailService', () => {
         template: '<!DOCTYPE html><html><head><title>Test</title></head><body>Hello, World!</body></html>',
       };
 
+      mockValidateString.mockReturnValue({ results: [{ messages: [] }] });
       (fs.existsSync as jest.Mock).mockReturnValue(false);
 
       await expect(service.updateTemplate(templateName, templateInfo)).rejects.toThrow(CustomHttpException);
