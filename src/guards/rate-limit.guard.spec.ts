@@ -21,6 +21,10 @@ function makeContext(req: any, res: any): ExecutionContext {
 describe('RateLimitGuard (in-memory fallback)', () => {
   let guard: RateLimitGuardType;
   beforeAll(async () => {
+    process.env.RATE_LIMIT_GLOBAL = '2';
+    process.env.RATE_LIMIT_WINDOW_SEC = '60';
+    process.env.RATE_LIMIT_SENSITIVE = '1';
+    process.env.RATE_LIMIT_SENSITIVE_WINDOW_SEC = '60';
     ({ RateLimitGuard } = await import('./rate-limit.guard'));
   });
 
