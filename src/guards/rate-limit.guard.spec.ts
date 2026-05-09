@@ -1,12 +1,14 @@
 import * as dotenv from 'dotenv';
 import { ModuleRef } from '@nestjs/core';
 import { ExecutionContext, HttpException } from '@nestjs/common';
+import { afterEach, beforeAll, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import type { RateLimitGuard as RateLimitGuardType } from './rate-limit.guard';
 
 dotenv.config();
 
 // Load after env is available so the guard reads .env values at import time.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { RateLimitGuard } = require('./rate-limit.guard');
+
+let RateLimitGuard: typeof RateLimitGuardType;
 
 function makeContext(req: any, res: any): ExecutionContext {
   return {
@@ -17,7 +19,10 @@ function makeContext(req: any, res: any): ExecutionContext {
 }
 
 describe('RateLimitGuard (in-memory fallback)', () => {
-  let guard: InstanceType<typeof RateLimitGuard>;
+  let guard: RateLimitGuardType;
+  beforeAll(async () => {
+    ({ RateLimitGuard } = await import('./rate-limit.guard'));
+  });
 
   beforeEach(() => {
     const moduleRef = { get: jest.fn().mockReturnValue(undefined) } as unknown as ModuleRef;
