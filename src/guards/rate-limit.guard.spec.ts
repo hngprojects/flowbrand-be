@@ -95,6 +95,7 @@ describe('RateLimitGuard (Redis)', () => {
   test('enforces sensitive email limit for POST /auth/login', async () => {
     const res = { setHeader: jest.fn() };
     const req = {
+      originalUrl: '/api/v1/auth/login',
       path: '/auth/login',
       method: 'POST',
       headers: {},
@@ -117,5 +118,22 @@ describe('RateLimitGuard (Redis)', () => {
     }
 
     expect(res.setHeader).toHaveBeenCalled();
+  });
+
+  test('does not rate-limit paths that only look like auth (e.g. /authenticate)', async () => {
+    const res = { setHeader: jest.fn() };
+    const req = {
+      originalUrl: '/api/v1/authenticate/callback',
+      path: '/authenticate/callback',
+      method: 'GET',
+      headers: {},
+      ip: '9.9.9.9',
+      body: {},
+    };
+    const ctx = makeContext(req, res);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(res.setHeader).not.toHaveBeenCalled();
   });
 });

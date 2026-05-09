@@ -7,6 +7,7 @@ import { RedisService } from '@modules/redis/services/redis.service';
  * - Uses the application Redis (RedisService) for counters and TTLs.
  * - If Redis operations fail, responds with 503 so limits are not silently bypassed.
  * - Env values are read at runtime (via getters) so tests can set `process.env` before use.
+ * - Only applies to URLs whose path contains an `auth` segment (e.g. /api/v1/auth/login), not /authenticate.
  * - Adds standard X-RateLimit headers and `Retry-After` on 429 responses.
  */
 @Injectable()
@@ -49,18 +50,58 @@ export class RateLimitGuard implements CanActivate {
     return { count, ttl };
   }
 
+  /** Strip IPv4-mapped IPv6 prefix; trim. Trusted list entries must match literally (no CIDR yet). */
+  private normalizeIp(value: string): string {
+    if (!value) return '';
+    const trimmed = value.trim();
+    if (trimmed.startsWith('::ffff:')) return trimmed.slice(7);
+    return trimmed;
+  }
+
+  /**
+   * Prefer the socket peer for trust checks. Only read X-Forwarded-For when the immediate peer is listed in
+   * TRUSTED_PROXIES, so arbitrary clients cannot spoof the header to bypass per-IP limits.
+   */
   private getIpFromRequest(req: any): string {
     const trusted = (process.env.TRUSTED_PROXIES || '')
       .split(',')
-      .map(s => s.trim())
+      .map(s => this.normalizeIp(s))
       .filter(Boolean);
     const forwarded = req.headers?.['x-forwarded-for'];
-    const remote = req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || '';
-    if (forwarded && trusted.length > 0) {
-      const forwardedIp = String(forwarded).split(',')[0].trim();
+    const socketRemote = this.normalizeIp(req.socket?.remoteAddress || req.connection?.remoteAddress || '');
+    const remote = socketRemote || this.normalizeIp(String(req.ip || ''));
+    const isTrustedProxy = socketRemote !== '' && trusted.includes(socketRemote);
+
+    if (forwarded && isTrustedProxy) {
+      const forwardedIp = this.normalizeIp(String(forwarded).split(',')[0]);
       return forwardedIp || remote;
     }
     return remote;
+  }
+
+  /** Pathname without query; prefers Express full path so global prefix (e.g. api/v1) is visible. */
+  private pathnameFromRequest(req: any): string {
+    const raw = String(req.originalUrl ?? req.url ?? req.path ?? '');
+    return raw.split('?')[0] || '';
+  }
+
+  private pathSegments(pathname: string): string[] {
+    return pathname.split('/').filter(Boolean);
+  }
+
+  /** True when URL contains an `auth` path segment (matches /api/v1/auth/..., not /authenticate). */
+  private isAuthNamespacePath(pathname: string): boolean {
+    return this.pathSegments(pathname).includes('auth');
+  }
+
+  /** POST …/auth/login|register|forgot-password (works with or without global prefix). */
+  private isSensitiveAuthRoute(req: any): boolean {
+    if (req.method !== 'POST') return false;
+    const segments = this.pathSegments(this.pathnameFromRequest(req));
+    const i = segments.indexOf('auth');
+    if (i < 0 || i >= segments.length - 1) return false;
+    const action = segments[i + 1];
+    return action === 'login' || action === 'register' || action === 'forgot-password';
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -70,8 +111,8 @@ export class RateLimitGuard implements CanActivate {
 
     if (!req || !res) return true;
 
-    const path: string = req.path || req.url || '';
-    if (!path.startsWith('/auth')) return true;
+    const pathname = this.pathnameFromRequest(req);
+    if (!this.isAuthNamespacePath(pathname)) return true;
 
     const ip = this.getIpFromRequest(req) || 'unknown';
 
@@ -99,13 +140,13 @@ export class RateLimitGuard implements CanActivate {
       throw new HttpException('Too Many Requests', HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    const isSensitive =
-      req.method === 'POST' && ['/auth/login', '/auth/register', '/auth/forgot-password'].includes(path);
-    if (isSensitive) {
+    if (this.isSensitiveAuthRoute(req)) {
       const body = req.body || {};
       const email = (body.email || body.username || body.identifier || '').toString().toLowerCase().trim();
       const sensitiveKeyBase = email ? `ratelimit:email:${email}` : `ratelimit:ip:${ip}`;
-      const action = path.split('/').pop() || 'login';
+      const segments = this.pathSegments(pathname);
+      const authIdx = segments.indexOf('auth');
+      const action = authIdx >= 0 && segments[authIdx + 1] ? segments[authIdx + 1] : 'login';
       const sensitiveKey = `${sensitiveKeyBase}:${action}`;
 
       const sensitive = await this.incrementKey(sensitiveKey, this.sensitiveWindowSec);
