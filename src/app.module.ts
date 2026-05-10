@@ -30,6 +30,7 @@ import { ApiStatusModule } from '@modules/api-status/api-status.module';
 import s3Config from '@config/s3.config';
 import { RateLimitGuard } from '@guards/rate-limit.guard';
 import mailerConfig from '@config/mailer.config';
+import { AllEntitiesModule } from './entities/entities.module';
 
 @Module({
   providers: [
@@ -103,7 +104,8 @@ import mailerConfig from '@config/mailer.config';
     }),
     ApiStatusModule,
     RedisModule,
+    AllEntitiesModule,
   ],
   controllers: [HealthController, ProbeController],
 })
-export class AppModule { }
+export class AppModule {}

@@ -112,6 +112,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     } catch (err) {
       this.logger.error(`EXPIRE failed`, (err as Error).message);
       return false;
+  async expire(key: string, ttl: number): Promise<void> {
+    try {
+      await this.client.expire(key, ttl);
+    } catch (err) {
+      this.logger.error(`EXPIRE failed`, (err as Error).message);
     }
   }
 
