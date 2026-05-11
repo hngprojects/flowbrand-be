@@ -28,6 +28,7 @@ import { RedisModule } from '@modules/redis/redis.module';
 import { join } from 'path';
 import { ApiStatusModule } from '@modules/api-status/api-status.module';
 import s3Config from '@config/s3.config';
+import { RateLimitGuard } from '@guards/rate-limit.guard';
 import mailerConfig from '@config/mailer.config';
 import { AllEntitiesModule } from './entities/entities.module';
 
@@ -48,6 +49,10 @@ import { AllEntitiesModule } from './entities/entities.module';
     {
       provide: 'APP_GUARD',
       useClass: AuthGuard,
+    },
+    {
+      provide: 'APP_GUARD',
+      useClass: RateLimitGuard,
     },
   ],
   imports: [

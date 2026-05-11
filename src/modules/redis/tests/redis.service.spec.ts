@@ -10,6 +10,8 @@ const mockRedisInstance = {
   del: jest.fn(),
   exists: jest.fn(),
   incr: jest.fn(),
+  ttl: jest.fn(),
+  expire: jest.fn(),
   scan: jest.fn(),
   disconnect: jest.fn(),
   quit: jest.fn().mockResolvedValue('OK'),
@@ -84,6 +86,18 @@ describe('RedisService (unit)', () => {
     mockRedisInstance.incr.mockResolvedValueOnce(1).mockResolvedValueOnce(2);
     expect(await service.incr('rl:user1:/api/login')).toBe(1);
     expect(await service.incr('rl:user1:/api/login')).toBe(2);
+  });
+
+  it('ttl returns seconds-to-live from Redis', async () => {
+    mockRedisInstance.ttl.mockResolvedValue(42);
+    expect(await service.ttl('rl:user1:key')).toBe(42);
+    expect(mockRedisInstance.ttl).toHaveBeenCalledWith('rl:user1:key');
+  });
+
+  it('expire sets TTL on a key', async () => {
+    mockRedisInstance.expire.mockResolvedValue(1);
+    expect(await service.expire('rl:user1:key', 60)).toBe(true);
+    expect(mockRedisInstance.expire).toHaveBeenCalledWith('rl:user1:key', 60);
   });
 
   it('delByPattern scans and deletes matching keys only', async () => {

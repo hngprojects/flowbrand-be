@@ -95,11 +95,23 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async expire(key: string, ttl: number): Promise<void> {
+  /** TTL in seconds, or -2/-1 per Redis semantics; null if Redis error. */
+  async ttl(key: string): Promise<number | null> {
     try {
-      await this.client.expire(key, ttl);
+      return await this.client.ttl(key);
+    } catch (err) {
+      this.logger.error(`TTL failed`, (err as Error).message);
+      return null;
+    }
+  }
+
+  /** Returns true if an expiry was set on an existing key. */
+  async expire(key: string, seconds: number): Promise<boolean> {
+    try {
+      return (await this.client.expire(key, seconds)) === 1;
     } catch (err) {
       this.logger.error(`EXPIRE failed`, (err as Error).message);
+      return false;
     }
   }
 
