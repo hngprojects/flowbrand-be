@@ -86,7 +86,7 @@ export default class AuthenticationService {
       const statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
 
       if (err.name === 'QueryFailedError') {
-        errorMessage = 'Database error occurred during registration';
+        errorMessage = SYS_MSG.DB_ERROR_REGISTRATION;
         this.logger.error('DB_ERROR during registration', err);
       }
 
