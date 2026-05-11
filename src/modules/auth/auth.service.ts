@@ -10,6 +10,9 @@ import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
+import { EmailService } from '@modules/email/email.service';
+import { FRONTEND_RESET_PASSWORD } from '@shared/constants/app-constants';
+
 import { UserSession } from './entities/user-session.entity';
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 import { v4 as uuidv4 } from 'uuid';
@@ -23,6 +26,7 @@ const OTP_LENGTH = 6;
 const OTP_TTL_SECONDS = 300; // 5 minutes
 const OTP_RESEND_COOLDOWN_SECONDS = 30;
 const MAX_OTP_ATTEMPTS = 5;
+const RESET_OTP_TTL_SECONDS = 300;
 
 @Injectable()
 export default class AuthenticationService {
@@ -35,13 +39,14 @@ export default class AuthenticationService {
     private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
+    private readonly emailService: EmailService,
+    private readonly dataSource: DataSource,
     private readonly queueService: QueueService,
     private readonly lockoutService: LockoutService,
     private readonly sessionService: SessionService,
     @InjectRepository(AuthMetadata)
-    private readonly authMetaData: Repository<AuthMetadata>,
-    private readonly dataSource: DataSource,
-  ) { }
+    private readonly authMetaData: Repository<AuthMetadata>
+  ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
     // Normalize email: trim whitespace and convert to lowercase
@@ -54,7 +59,7 @@ export default class AuthenticationService {
       throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_EXIST, HttpStatus.BAD_REQUEST);
     }
 
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
+    const hashedPassword = await this.hashPassword(createUserDto.password);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -183,7 +188,7 @@ export default class AuthenticationService {
       throw new CustomHttpException(SYS_MSG.INVALID_PASSWORD, HttpStatus.BAD_REQUEST);
     }
 
-    user.password = await bcrypt.hash(newPassword, 10);
+    user.password = await this.hashPassword(newPassword);
     await this.userRepository.save(user);
 
     return { status_code: HttpStatus.OK, message: SYS_MSG.PASSWORD_UPDATED };
@@ -365,6 +370,94 @@ export default class AuthenticationService {
     };
   }
 
+  async forgotPassword(email: string) {
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (user) {
+      const otp = this.generateOtp();
+      const key = `reset_otp:${email}`;
+      try {
+        await this.redisService.set(key, otp, RESET_OTP_TTL_SECONDS);
+        await this.emailService.sendForgotPasswordMail(email, user.full_name, FRONTEND_RESET_PASSWORD, otp);
+      } catch (err) {
+        this.logger.error(
+          `Failed to issue password reset OTP for user ${user.id}`,
+          (err as Error).stack ?? (err as Error).message
+        );
+      }
+    }
+    return {
+      status_code: HttpStatus.OK,
+      message: SYS_MSG.FORGOT_PASSWORD_OTP_SENT,
+    };
+  }
+
+  async resetPassword(email: string, otp: string, newPassword: string) {
+    const key = `reset_otp:${email}`;
+    const storedOtp = await this.redisService.get(key);
+
+    if (otp !== storedOtp) {
+      throw new CustomHttpException(SYS_MSG.INCORRECT_TOTP_CODE, HttpStatus.BAD_REQUEST);
+    }
+
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) {
+      await this.redisService.del(key);
+      throw new CustomHttpException(SYS_MSG.INCORRECT_TOTP_CODE, HttpStatus.BAD_REQUEST);
+    }
+
+    const hashedPassword = await this.hashPassword(newPassword);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await queryRunner.manager.update(User, { id: user.id }, { password: hashedPassword });
+      await queryRunner.manager.update(
+        UserSession,
+        { user_id: user.id, is_revoked: false },
+        { is_revoked: true, revoked_at: new Date() }
+      );
+      await queryRunner.commitTransaction();
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
+
+    // Redis cleanup is best-effort; the DB is the source of truth.
+    // Session cache is purged before the OTP key so a partial failure
+    // still leaves the OTP valid for a safe retry.
+    try {
+      await this.redisService.delByPattern(`active_session:${user.id}:*`);
+    } catch (err) {
+      this.logger.warn(`Failed to purge session cache for user ${user.id}: ${(err as Error).message}`);
+    }
+
+    try {
+      await this.redisService.del(key);
+    } catch (err) {
+      this.logger.warn(`Failed to delete reset OTP key for ${email}: ${(err as Error).message}`);
+    }
+
+    return {
+      status_code: HttpStatus.OK,
+      message: SYS_MSG.PASSWORD_UPDATED,
+    };
+  }
+
+  private async hashPassword(password: string): Promise<string> {
+    return bcrypt.hash(password, 10);
+  }
+
+  private generateOtp(length: number = OTP_LENGTH): string {
+    if (!Number.isInteger(length) || length < 1 || length > 10) {
+      throw new RangeError('OTP length must be an integer between 1 and 10');
+    }
+    const max = 10 ** length;
+    return randomInt(0, max).toString().padStart(length, '0');
+  }
+
   private hashRefreshToken(token: string): string {
     const secret = authConfig().jwtRefreshSecret;
 
@@ -390,11 +483,5 @@ export default class AuthenticationService {
       variant: 'register-otp',
       mail: { to: email, context: { otp, email } },
     });
-  }
-
-  private generateOtp(): string {
-    return Math.floor(Math.random() * 10 ** OTP_LENGTH)
-      .toString()
-      .padStart(OTP_LENGTH, '0');
   }
 }

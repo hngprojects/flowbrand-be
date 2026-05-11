@@ -44,7 +44,6 @@ const expiry = authConfig().jwtExpiry;
         expiresIn: `${expiry}` as unknown as StringValue,
       },
     }),
-    RedisModule,
   ],
   exports: [],
 })

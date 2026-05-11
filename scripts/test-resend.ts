@@ -44,7 +44,7 @@ async function main() {
   console.log('  Accepted :', info.accepted);
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error('SMTP error:', err.message);
   process.exit(1);
 });

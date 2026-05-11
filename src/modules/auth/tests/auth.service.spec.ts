@@ -4,16 +4,18 @@ import { HttpStatus } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { RedisService } from '@modules/redis/services/redis.service';
 import QueueService from '@modules/email/queue.service';
 import AuthenticationService from '../auth.service';
+import { UserSession } from '../entities/user-session.entity';
+import { FRONTEND_RESET_PASSWORD } from '@shared/constants/app-constants';
+import { EmailService } from '@modules/email/email.service';
 import { LockoutService } from '../lockout.service';
 import { SessionService } from '../session.service';
-import { UserSession } from '../entities/user-session.entity';
-import { DataSource } from 'typeorm';
 import { AuthMetadata } from '../entities/auth-metadata.entity';
 import { Response } from 'express';
 
@@ -29,6 +31,7 @@ describe('AuthenticationService', () => {
     incr: jest.fn().mockResolvedValue(1),
     exists: jest.fn().mockResolvedValue(false),
     expire: jest.fn().mockResolvedValue(undefined),
+    delByPattern: jest.fn(),
   };
   const userSessionRepositoryMock = {
     create: jest.fn(),
@@ -45,33 +48,34 @@ describe('AuthenticationService', () => {
     clear: jest.fn(),
   };
   const sessionServiceMock = {
-    create: jest
-      .fn()
-      .mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' }),
+    create: jest.fn().mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' }),
   };
   const authMetadataRepositoryMock = {
     create: jest.fn(),
     save: jest.fn(),
   };
-
-  const dataSourceMock = {
-    createQueryRunner: jest.fn().mockReturnValue({
-      connect: jest.fn(),
-      startTransaction: jest.fn(),
-      commitTransaction: jest.fn(),
-      rollbackTransaction: jest.fn(),
-      release: jest.fn(),
-      manager: {
-        create: jest.fn().mockImplementation((entity, data) => data),
-        save: jest
-          .fn()
-          .mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
-      },
-    }),
+  const queryRunnerMock = {
+    connect: jest.fn().mockResolvedValue(undefined),
+    startTransaction: jest.fn().mockResolvedValue(undefined),
+    commitTransaction: jest.fn().mockResolvedValue(undefined),
+    rollbackTransaction: jest.fn().mockResolvedValue(undefined),
+    release: jest.fn().mockResolvedValue(undefined),
+    manager: {
+      create: jest.fn().mockImplementation((entity, data) => data),
+      save: jest
+        .fn()
+        .mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
+      update: jest.fn().mockResolvedValue(undefined),
+    },
   };
-
+  const dataSourceMock = {
+    createQueryRunner: jest.fn().mockReturnValue(queryRunnerMock),
+  };
   const responseMock = {
     cookie: jest.fn(),
+  };
+  const emailServiceMock = {
+    sendForgotPasswordMail: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -83,6 +87,7 @@ describe('AuthenticationService', () => {
         { provide: getRepositoryToken(AuthMetadata), useValue: authMetadataRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
+        { provide: EmailService, useValue: emailServiceMock },
         { provide: DataSource, useValue: dataSourceMock },
         { provide: QueueService, useValue: queueServiceMock },
         { provide: LockoutService, useValue: lockoutServiceMock },
@@ -158,9 +163,7 @@ describe('AuthenticationService', () => {
 
     it('throws when a user with that email already exists', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'existing' });
-      await expect(service.createNewUser(dto)).rejects.toThrow(
-        CustomHttpException
-      );
+      await expect(service.createNewUser(dto)).rejects.toThrow(CustomHttpException);
     });
   });
 
@@ -401,6 +404,109 @@ describe('AuthenticationService', () => {
       const hashed = await bcrypt.hash('correct-old', 10);
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', password: hashed });
       await expect(service.changePassword('user-1', 'wrong-old', 'new')).rejects.toThrow(CustomHttpException);
+    });
+  });
+
+  describe('forgotPassword', () => {
+    it('stores an OTP in Redis and returns success for a known email', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        full_name: 'Jane Doe',
+      });
+
+      const result = await service.forgotPassword('jane@example.com');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.message).toBe(SYS_MSG.FORGOT_PASSWORD_OTP_SENT);
+      expect(redisServiceMock.set).toHaveBeenCalledWith(
+        expect.stringContaining('jane@example.com'),
+        expect.stringMatching(/^\d{6}$/),
+        300
+      );
+      expect(emailServiceMock.sendForgotPasswordMail).toHaveBeenCalledWith(
+        'jane@example.com',
+        'Jane Doe',
+        FRONTEND_RESET_PASSWORD,
+        expect.stringMatching(/^\d{6}$/)
+      );
+    });
+
+    it('still returns success when OTP issuance fails (enumeration-safe)', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        full_name: 'Jane Doe',
+      });
+      redisServiceMock.set.mockRejectedValueOnce(new Error('redis down'));
+
+      const result = await service.forgotPassword('jane@example.com');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.message).toBe(SYS_MSG.FORGOT_PASSWORD_OTP_SENT);
+    });
+
+    it('returns the same success response for an unknown email without touching Redis', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+
+      const result = await service.forgotPassword('nobody@example.com');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.message).toBe(SYS_MSG.FORGOT_PASSWORD_OTP_SENT);
+      expect(redisServiceMock.set).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resetPassword', () => {
+    const email = 'jane@example.com';
+    const otp = '123456';
+    const key = `reset_otp:${email}`;
+
+    it('resets the password and revokes all sessions for a valid OTP', async () => {
+      redisServiceMock.get.mockResolvedValueOnce(otp);
+      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', email, password: 'old-hash' });
+      const result = await service.resetPassword(email, otp, 'NewP@ss123');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.message).toBe(SYS_MSG.PASSWORD_UPDATED);
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.manager.update).toHaveBeenCalledWith(
+        User,
+        { id: 'user-1' },
+        { password: expect.any(String) }
+      );
+      expect(queryRunnerMock.manager.update).toHaveBeenCalledWith(
+        UserSession,
+        { user_id: 'user-1', is_revoked: false },
+        { is_revoked: true, revoked_at: expect.any(Date) }
+      );
+      expect(redisServiceMock.delByPattern).toHaveBeenCalledWith('active_session:user-1:*');
+      expect(redisServiceMock.del).toHaveBeenCalledWith(key);
+    });
+
+    it('throws for an invalid or expired OTP', async () => {
+      redisServiceMock.get.mockResolvedValueOnce(null);
+
+      await expect(service.resetPassword(email, 'wrong', 'NewP@ss123')).rejects.toThrow(CustomHttpException);
+      expect(userRepositoryMock.findOne).not.toHaveBeenCalled();
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
+    });
+
+    it('throws for an OTP mismatch', async () => {
+      redisServiceMock.get.mockResolvedValueOnce('654321');
+
+      await expect(service.resetPassword(email, otp, 'NewP@ss123')).rejects.toThrow(CustomHttpException);
+      expect(userRepositoryMock.findOne).not.toHaveBeenCalled();
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
+    });
+
+    it('deletes the OTP key and throws when OTP is valid but user no longer exists', async () => {
+      redisServiceMock.get.mockResolvedValueOnce(otp);
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.resetPassword(email, otp, 'NewP@ss123')).rejects.toThrow(CustomHttpException);
+      expect(redisServiceMock.del).toHaveBeenCalledWith(key);
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
     });
   });
 });
