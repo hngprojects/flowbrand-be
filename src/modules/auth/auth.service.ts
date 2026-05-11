@@ -3,16 +3,13 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { createHmac, randomInt } from 'crypto';
 import authConfig from '@config/auth.config';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
-import { UserSession } from './entities/user-session.entity';
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
-import { v4 as uuidv4 } from 'uuid';
 import { RedisService } from '@modules/redis/services/redis.service';
 import { AuthMetadata } from './entities/auth-metadata.entity';
 import QueueService from '@modules/email/queue.service';
@@ -31,8 +28,6 @@ export default class AuthenticationService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(UserSession)
-    private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
     private readonly queueService: QueueService,
@@ -151,25 +146,12 @@ export default class AuthenticationService {
     }
 
     await this.lockoutService.clear(meta);
-    const { rawToken, sessionId } = await this.sessionService.create(user);
-
-    const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
-    const access_token = this.jwtService.sign({ sub: user.id, id: user.id, email: user.email, sid: sessionId });
+    const auth = await this.buildAuthPayload(user);
 
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.LOGIN_SUCCESSFUL,
-      data: {
-        access_token,
-        refresh_token: rawToken,
-        expires_at: new Date(Date.now() + jwtExpirySeconds * 1000).toISOString(),
-        user: {
-          id: user.id,
-          full_name: user.full_name,
-          email: user.email,
-          avatar_url: user.avatar_url,
-        },
-      },
+      data: auth,
     };
   }
 
@@ -246,28 +228,14 @@ export default class AuthenticationService {
       this.redisService.del(`limit:${email}`),
     ]);
 
-    const { rawToken, sessionId } = await this.sessionService.create(user);
-
-    const access_token = this.jwtService.sign({
-      id: user.id,
-      sub: user.id,
-      sid: sessionId,
-      email: user.email,
-    });
+    const auth = await this.buildAuthPayload(user);
 
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.EMAIL_VERIFIED,
       data: {
-        access_token,
-        refresh_token: rawToken,
-        user: {
-          id: user.id,
-          full_name: user.full_name,
-          email: user.email,
-          avatar_url: user.avatar_url,
-          is_verified: true,
-        },
+        ...auth,
+        user: { ...auth.user, is_verified: true },
       },
     };
   }
@@ -327,56 +295,32 @@ export default class AuthenticationService {
       throw new CustomHttpException(SYS_MSG.USER_OAUTH_CREATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    const rawRefreshToken = uuidv4();
-    const hashedRefreshToken = this.hashRefreshToken(rawRefreshToken);
-    const refreshExpirySeconds = +(authConfig().jwtRefreshExpiry ?? 604800);
-    const expiresAt = new Date(Date.now() + refreshExpirySeconds * 1000);
-
-    const session = await this.userSessionRepository.save(
-      this.userSessionRepository.create({
-        user_id: user.id,
-        refresh_token: hashedRefreshToken,
-        expires_at: expiresAt,
-        is_revoked: false,
-      })
-    );
-
-    try {
-      await this.redisService.set(`refresh:${session.id}`, hashedRefreshToken, refreshExpirySeconds);
-    } catch (error) {
-      console.error('Failed to persist OAuth refresh token to Redis', error);
-    }
-
-    const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email, sid: session.id });
+    const auth = await this.buildAuthPayload(user);
 
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.OAUTH_LOGIN_SUCCESSFUL,
-      access_token,
-      refresh_token: rawRefreshToken,
-      data: {
-        user: {
-          id: user.id,
-          full_name: user.full_name,
-          email: user.email,
-          avatar_url: user.avatar_url,
-        },
-      },
+      access_token: auth.access_token,
+      refresh_token: auth.refresh_token,
+      data: { user: auth.user },
     };
   }
 
-  private hashRefreshToken(token: string): string {
-    const secret = authConfig().jwtRefreshSecret;
-
-    if (!secret) {
-      throw new CustomHttpException(SYS_MSG.SERVER_ERROR, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-
-    return createHmac('sha256', secret).update(token).digest('hex');
-  }
-
-  private verifyRefreshToken(token: string, hash: string): boolean {
-    return this.hashRefreshToken(token) === hash;
+  private async buildAuthPayload(user: User): Promise<{
+    access_token: string;
+    refresh_token: string;
+    expires_at: string;
+    user: { id: string; full_name: string; email: string; avatar_url: string | null };
+  }> {
+    const { rawToken, sessionId } = await this.sessionService.create(user);
+    const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
+    const access_token = this.jwtService.sign({ sub: user.id, id: user.id, email: user.email, sid: sessionId });
+    return {
+      access_token,
+      refresh_token: rawToken,
+      expires_at: new Date(Date.now() + jwtExpirySeconds * 1000).toISOString(),
+      user: { id: user.id, full_name: user.full_name, email: user.email, avatar_url: user.avatar_url },
+    };
   }
 
   // Generates a fresh OTP, stores the bcrypt hash in Redis, and queues the email.

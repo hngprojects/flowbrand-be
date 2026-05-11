@@ -18,5 +18,6 @@ export interface OAuthLoginResponse {
       email: string;
       avatar_url: string | null;
     };
+    expires_at?: string;
   };
 }
