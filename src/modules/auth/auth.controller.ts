@@ -1,6 +1,6 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Req, Get, UseGuards, Res } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { skipAuth } from '@shared/helpers/skipAuth';
@@ -13,7 +13,7 @@ import authConfig from '@config/auth.config';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
-import { SendOtpDocs, VerifyOtpDocs, ResendOtpDocs, LoginDocs, ChangePasswordDocs, RegisterDocs } from './docs/auth-swagger.doc';
+import { SendOtpDocs, VerifyOtpDocs, ResendOtpDocs, LoginDocs, ChangePasswordDocs, RegisterDocs, GoogleAuthDocs, GoogleCallbackDocs } from './docs/auth-swagger.doc';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -37,8 +37,7 @@ export default class RegistrationController {
   @skipAuth()
   @Get('google')
   @UseGuards(AuthGuard('google'))
-  @ApiOperation({ summary: 'Initiate Google OAuth login' })
-  @ApiResponse({ status: HttpStatus.FOUND, description: 'Redirects to Google consent screen' })
+  @GoogleAuthDocs()
   async googleAuth(): Promise<void> {
     // Passport handles the redirect to Google
   }
@@ -46,9 +45,7 @@ export default class RegistrationController {
   @skipAuth()
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
-  @ApiOperation({ summary: 'Google OAuth callback handler' })
-  @ApiResponse({ status: HttpStatus.FOUND, description: 'Redirects to dashboard on success' })
-  @ApiResponse({ status: HttpStatus.INTERNAL_SERVER_ERROR, description: SYS_MSG.GOOGLE_OAUTH_FAILED })
+  @GoogleCallbackDocs()
   async googleAuthRedirect(@Req() req: Request & { user?: GoogleOAuthProfile }, @Res() res: Response): Promise<void> {
     const payload = req.user;
 
