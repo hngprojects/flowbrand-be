@@ -35,8 +35,8 @@ export default class AuthenticationService {
     private readonly sessionService: SessionService,
     @InjectRepository(AuthMetadata)
     private readonly authMetaData: Repository<AuthMetadata>,
-    private readonly dataSource: DataSource,
-  ) { }
+    private readonly dataSource: DataSource
+  ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
     // Normalize email: trim whitespace and convert to lowercase
@@ -151,7 +151,12 @@ export default class AuthenticationService {
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.LOGIN_SUCCESSFUL,
-      data: auth,
+      refresh_token: auth.refresh_token,
+      data: {
+        access_token: auth.access_token,
+        expires_at: auth.expires_at,
+        user: auth.user,
+      },
     };
   }
 
@@ -233,8 +238,10 @@ export default class AuthenticationService {
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.EMAIL_VERIFIED,
+      refresh_token: auth.refresh_token,
       data: {
-        ...auth,
+        access_token: auth.access_token,
+        expires_at: auth.expires_at,
         user: { ...auth.user, is_verified: true },
       },
     };

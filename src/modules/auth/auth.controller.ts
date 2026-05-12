@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, Get, UseGuards, Res } from '@nestjs/common';
+import { Body, Controller, HttpStatus, Post, Req, Get, UseGuards, Res } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
@@ -13,7 +13,16 @@ import authConfig from '@config/auth.config';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
-import { SendOtpDocs, VerifyOtpDocs, ResendOtpDocs, LoginDocs, ChangePasswordDocs, RegisterDocs, GoogleAuthDocs, GoogleCallbackDocs } from './docs/auth-swagger.doc';
+import {
+  SendOtpDocs,
+  VerifyOtpDocs,
+  ResendOtpDocs,
+  LoginDocs,
+  ChangePasswordDocs,
+  RegisterDocs,
+  GoogleAuthDocs,
+  GoogleCallbackDocs,
+} from './docs/auth-swagger.doc';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -30,8 +39,10 @@ export default class RegistrationController {
   @skipAuth()
   @Post('login')
   @LoginDocs()
-  async login(@Body() loginDto: LoginDto) {
-    return this.authService.loginUser(loginDto);
+  async login(@Body() loginDto: LoginDto, @Res({ passthrough: true }) res: Response) {
+    const { refresh_token, ...result } = await this.authService.loginUser(loginDto);
+    this.setRefreshTokenCookie(res, refresh_token);
+    return result;
   }
 
   @skipAuth()
@@ -49,7 +60,7 @@ export default class RegistrationController {
   async googleAuthRedirect(@Req() req: Request & { user?: GoogleOAuthProfile }, @Res() res: Response): Promise<void> {
     const payload = req.user;
 
-   if (!payload) {
+    if (!payload) {
       const frontend = (authConfig().frontendUrl || '').replace(/\/$/, '');
       const target = frontend ? `${frontend}/login?error=oauth_failed` : '/login?error=oauth_failed';
       res.redirect(HttpStatus.FOUND, target);
@@ -107,8 +118,20 @@ export default class RegistrationController {
   @skipAuth()
   @Post('verify-otp')
   @VerifyOtpDocs()
-  async verifyOtp(@Body() body: VerifyOtpDto) {
-    return this.authService.verifyOtp(body.email, body.otp);
+  async verifyOtp(@Body() body: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
+    const { refresh_token, ...result } = await this.authService.verifyOtp(body.email, body.otp);
+    this.setRefreshTokenCookie(res, refresh_token);
+    return result;
+  }
+
+  private setRefreshTokenCookie(res: Response, token: string): void {
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.cookie('refresh_token', token, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'strict' : 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
   }
 
   @skipAuth()

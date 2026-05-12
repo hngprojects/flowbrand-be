@@ -44,7 +44,10 @@ export function SendOtpDocs() {
       description: 'OTP dispatched. Returns 200 even for unknown emails to prevent enumeration.',
       schema: { example: { status_code: 200, message: 'OTP sent successfully' } },
     }),
-    ApiResponse({ status: HttpStatus.TOO_MANY_REQUESTS, description: 'Resend cooldown active (30s). Try again shortly.' })
+    ApiResponse({
+      status: HttpStatus.TOO_MANY_REQUESTS,
+      description: 'Resend cooldown active (30s). Try again shortly.',
+    })
   );
 }
 
@@ -55,14 +58,14 @@ export function VerifyOtpDocs() {
     ApiBody({ type: VerifyOtpDto }),
     ApiResponse({
       status: HttpStatus.OK,
-      description: 'Email verified. Returns JWT access token, refresh token, and user.',
+      description:
+        'Email verified. Returns JWT access token, expiry, and user. Refresh token is set as an HttpOnly cookie.',
       schema: {
         example: {
           status_code: 200,
           message: 'Email verified successfully',
           data: {
             access_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
-            refresh_token: 'a3f2c1d4e5b6c7d8e9f0a1b2c3d4e5f6...',
             expires_at: '2026-05-11T12:00:00.000Z',
             user: { ...userShape, is_verified: true },
           },
@@ -95,14 +98,13 @@ export function LoginDocs() {
     ApiBody({ type: LoginDto }),
     ApiResponse({
       status: HttpStatus.OK,
-      description: 'Returns JWT access token, refresh token, expiry, and user.',
+      description: 'Returns JWT access token, expiry, and user. Refresh token is set as an HttpOnly cookie.',
       schema: {
         example: {
           status_code: 200,
           message: 'Login Successful',
           data: {
             access_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
-            refresh_token: 'a3f2c1d4e5b6c7d8e9f0a1b2c3d4e5f6...',
             expires_at: '2026-05-11T12:00:00.000Z',
             user: userShape,
           },
@@ -145,7 +147,8 @@ export function GoogleCallbackDocs() {
   return applyDecorators(
     ApiOperation({
       summary: 'Google OAuth callback (handled by Passport)',
-      description: 'Google redirects here after consent. On success, sets auth cookies and redirects to FRONTEND_URL/dashboard. On failure, redirects to FRONTEND_URL/login?error=<reason>.',
+      description:
+        'Google redirects here after consent. On success, sets auth cookies and redirects to FRONTEND_URL/dashboard. On failure, redirects to FRONTEND_URL/login?error=<reason>.',
     }),
     ApiResponse({ status: HttpStatus.FOUND, description: 'Redirects to frontend dashboard on success.' }),
     ApiResponse({ status: HttpStatus.FOUND, description: 'Redirects to frontend login with error param on failure.' })
