@@ -1,5 +1,6 @@
-import { Column, DeleteDateColumn, Entity, Index } from 'typeorm';
+import { Column, DeleteDateColumn, Entity, Index, OneToMany } from 'typeorm';
 import { AbstractBaseEntity } from '../../../entities/base.entity';
+import { WizardSession } from '@modules/onboarding/entities/wizard-session.entity';
 
 @Entity({ name: 'users' })
 @Index('IDX_users_auth_provider_user', ['auth_provider', 'provider_user_id'], { unique: true })
@@ -42,4 +43,7 @@ export class User extends AbstractBaseEntity {
 
   @DeleteDateColumn({ name: 'deleted_at', type: 'timestamp', nullable: true })
   deleted_at: Date | null;
+
+  @OneToMany(() => WizardSession, (wizardSession) => wizardSession.user)
+  wizard_sessions: WizardSession[];
 }

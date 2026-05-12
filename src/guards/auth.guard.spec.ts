@@ -162,9 +162,7 @@ describe('AuthGuard', () => {
       const { ctx } = buildContext(bearerHeader('valid.token'));
 
       await expect(guard.canActivate(ctx)).rejects.toThrow();
-      expect(mockRedisService.get).toHaveBeenCalledWith(
-        `sess:${VALID_PAYLOAD.sub}:${VALID_PAYLOAD.sessionId}`,
-      );
+      expect(mockRedisService.get).toHaveBeenCalledWith(`sess:${VALID_PAYLOAD.sub}:${VALID_PAYLOAD.sessionId}`);
     });
   });
 
@@ -273,19 +271,19 @@ describe('AuthGuard', () => {
   // Error shape
 
   describe('error response shape', () => {
-  it('every 401 uses the UNAUTHENTICATED_MESSAGE constant', async () => {
-    const { ctx } = buildContext();
+    it('every 401 uses the UNAUTHENTICATED_MESSAGE constant', async () => {
+      const { ctx } = buildContext();
 
-    expect.assertions(3); // guarantees the catch block runs
+      expect.assertions(3); // guarantees the catch block runs
 
-    try {
-      await guard.canActivate(ctx);
-    } catch (err) {
-      expect(err).toBeInstanceOf(CustomHttpException);
-      const httpErr = err as CustomHttpException;
-      expect(httpErr.message).toBe(SYS_MSG.UNAUTHENTICATED_MESSAGE);
-      expect(httpErr.getStatus()).toBe(HttpStatus.UNAUTHORIZED);
-    }
+      try {
+        await guard.canActivate(ctx);
+      } catch (err) {
+        expect(err).toBeInstanceOf(CustomHttpException);
+        const httpErr = err as CustomHttpException;
+        expect(httpErr.message).toBe(SYS_MSG.UNAUTHENTICATED_MESSAGE);
+        expect(httpErr.getStatus()).toBe(HttpStatus.UNAUTHORIZED);
+      }
+    });
   });
-});
 });

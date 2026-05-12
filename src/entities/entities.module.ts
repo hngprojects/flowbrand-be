@@ -18,6 +18,7 @@ import { Strategy } from '@modules/strategies/entities/strategy.entity';
 import { StrategyDocument } from '@modules/strategies/entities/strategy-document.entity';
 import { TokenUsage } from '@modules/strategies/entities/token-usage.entity';
 import { Waitlist } from '@modules/waitlist/entities/waitlist.entity';
+import { WizardSession } from '@modules/onboarding/entities/wizard-session.entity';
 
 const entities = [
   User,
@@ -38,6 +39,7 @@ const entities = [
   StrategyDocument,
   TokenUsage,
   Waitlist,
+  WizardSession,
 ];
 
 @Global()
@@ -45,4 +47,4 @@ const entities = [
   imports: [TypeOrmModule.forFeature(entities)],
   exports: [TypeOrmModule],
 })
-export class AllEntitiesModule {}
+export class AllEntitiesModule { }

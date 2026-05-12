@@ -11,7 +11,7 @@ export class SessionService {
   constructor(
     @InjectRepository(UserSession)
     private readonly repo: Repository<UserSession>
-  ) { }
+  ) {}
 
   async create(user: User): Promise<{ rawToken: string; sessionId: string }> {
     const rawToken = randomBytes(32).toString('hex');

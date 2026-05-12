@@ -39,9 +39,7 @@ describe('AuthenticationService', () => {
     clear: jest.fn(),
   };
   const sessionServiceMock = {
-    create: jest
-      .fn()
-      .mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' }),
+    create: jest.fn().mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' }),
   };
   const authMetadataRepositoryMock = {
     create: jest.fn(),
@@ -86,7 +84,9 @@ describe('AuthenticationService', () => {
       release: jest.fn(),
       manager: {
         create: jest.fn().mockImplementation((_entity, data) => data),
-        save: jest.fn().mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
+        save: jest
+          .fn()
+          .mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
       },
     });
 
@@ -174,9 +174,7 @@ describe('AuthenticationService', () => {
 
     it('throws when a user with that email already exists', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'existing' });
-      await expect(service.createNewUser(dto)).rejects.toThrow(
-        CustomHttpException
-      );
+      await expect(service.createNewUser(dto)).rejects.toThrow(CustomHttpException);
     });
   });
 
