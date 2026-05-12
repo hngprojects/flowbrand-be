@@ -1,0 +1,103 @@
+name: Deploy Flowbrand BE
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: yarn install --ignore-engines
+
+      - name: Build
+        run: yarn build
+
+      - name: Create .env file
+        run: echo "${{ secrets.ENV_FILE }}" > .env
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass rsync
+
+      - name: Create deployment directory on server
+        run: |
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
+            -p ${{ secrets.SERVER_PORT }} \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "mkdir -p ~/flowbrand-be/dist"
+
+      - name: Copy files to server
+        run: |
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" rsync -avz --delete \
+            -e "ssh -p ${{ secrets.SERVER_PORT }} -o StrictHostKeyChecking=no" \
+            dist/ \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/flowbrand-be/dist/
+
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" rsync -avz \
+            -e "ssh -p ${{ secrets.SERVER_PORT }} -o StrictHostKeyChecking=no" \
+            package.json yarn.lock .env \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/flowbrand-be/
+
+      - name: Bootstrap server & start app
+        run: |
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh \
+            -p ${{ secrets.SERVER_PORT }} \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+
+            set -e
+
+            # Install nvm if not present (no sudo needed)
+            if [ ! -d "$HOME/.nvm" ]; then
+              echo "Installing nvm..."
+              curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+            fi
+
+            # Load nvm
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+            # Install Node 22 if not present
+            if ! node -v | grep -q "v22"; then
+              echo "Installing Node 22..."
+              nvm install 22
+              nvm use 22
+              nvm alias default 22
+            fi
+
+            # Install yarn if not present
+            if ! command -v yarn &> /dev/null; then
+              npm install -g yarn
+            fi
+
+            # Install PM2 if not present
+            if ! command -v pm2 &> /dev/null; then
+              npm install -g pm2
+            fi
+
+            # Install production dependencies
+            cd ~/flowbrand-be
+            yarn install --production --ignore-engines
+
+            # Start or restart app with PM2
+            if pm2 list | grep -q flowbrand-be; then
+              pm2 restart flowbrand-be
+            else
+              pm2 start ~/flowbrand-be/dist/src/main.js --name flowbrand-be
+              pm2 save
+            fi
+
+            echo "Deployment complete. App running on port 3008."
+          EOF
