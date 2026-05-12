@@ -145,3 +145,4 @@ export const USER_OAUTH_CREATION_FAILED = 'Failed to create user account';
 export const OAUTH_LOGIN_SUCCESSFUL = 'OAuth login successful';
 export const TERMS_AND_CONDITIONS = 'You must accept the terms and conditions to register';
 export const SESSION_CREATION_FAILED = 'Registration failed. Please try again';
+export const DB_ERROR_REGISTRATION = 'Database error occurred during registration';

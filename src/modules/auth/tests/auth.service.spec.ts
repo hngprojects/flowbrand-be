@@ -12,10 +12,8 @@ import QueueService from '@modules/email/queue.service';
 import AuthenticationService from '../auth.service';
 import { LockoutService } from '../lockout.service';
 import { SessionService } from '../session.service';
-import { UserSession } from '../entities/user-session.entity';
 import { DataSource } from 'typeorm';
 import { AuthMetadata } from '../entities/auth-metadata.entity';
-import { Response } from 'express';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
@@ -29,10 +27,6 @@ describe('AuthenticationService', () => {
     incr: jest.fn().mockResolvedValue(1),
     exists: jest.fn().mockResolvedValue(false),
     expire: jest.fn().mockResolvedValue(undefined),
-  };
-  const userSessionRepositoryMock = {
-    create: jest.fn(),
-    save: jest.fn(),
   };
   const queueServiceMock = {
     sendMail: jest.fn().mockResolvedValue({ jobId: 'mock-job' }),
@@ -75,11 +69,31 @@ describe('AuthenticationService', () => {
   };
 
   beforeEach(async () => {
+    // Re-establish defaults cleared by resetAllMocks (see afterEach)
+    redisServiceMock.get.mockResolvedValue(null);
+    redisServiceMock.set.mockResolvedValue('OK');
+    redisServiceMock.del.mockResolvedValue(1);
+    redisServiceMock.incr.mockResolvedValue(1);
+    redisServiceMock.exists.mockResolvedValue(false);
+    redisServiceMock.expire.mockResolvedValue(undefined);
+    sessionServiceMock.create.mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' });
+    queueServiceMock.sendMail.mockResolvedValue({ jobId: 'mock-job' });
+    dataSourceMock.createQueryRunner.mockReturnValue({
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      manager: {
+        create: jest.fn().mockImplementation((_entity, data) => data),
+        save: jest.fn().mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
+      },
+    });
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
-        { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: getRepositoryToken(AuthMetadata), useValue: authMetadataRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
@@ -94,7 +108,9 @@ describe('AuthenticationService', () => {
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    // resetAllMocks clears both call history AND the mockResolvedValueOnce queue,
+    // preventing leftover Once values from leaking into subsequent tests.
+    jest.resetAllMocks();
   });
 
   it('should be defined', () => {
@@ -401,6 +417,96 @@ describe('AuthenticationService', () => {
       const hashed = await bcrypt.hash('correct-old', 10);
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', password: hashed });
       await expect(service.changePassword('user-1', 'wrong-old', 'new')).rejects.toThrow(CustomHttpException);
+    });
+  });
+
+  // ─── handleOAuthLogin ─────────────────────────────────────────────────────
+
+  describe('handleOAuthLogin', () => {
+    const profile = {
+      provider: 'google',
+      providerId: 'google-123',
+      email: 'jane@example.com',
+      full_name: 'Jane Doe',
+      avatar_url: 'https://example.com/photo.jpg',
+    };
+
+    it('creates a new user and returns access_token + refresh_token for unknown email', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+      userRepositoryMock.create.mockImplementation(input => input);
+      userRepositoryMock.save.mockResolvedValueOnce({
+        id: 'user-1',
+        email: profile.email,
+        full_name: profile.full_name,
+        avatar_url: profile.avatar_url,
+      });
+      sessionServiceMock.create.mockResolvedValueOnce({ rawToken: 'raw-token', sessionId: 'session-1' });
+      jwtServiceMock.sign.mockReturnValueOnce('jwt');
+
+      const result = await service.handleOAuthLogin(profile);
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.access_token).toBe('jwt');
+      expect(result.refresh_token).toBe('raw-token');
+      expect(result.data.user.id).toBe('user-1');
+      expect(sessionServiceMock.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('reuses an existing Google user without re-saving', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: profile.email,
+        full_name: profile.full_name,
+        avatar_url: profile.avatar_url,
+        auth_provider: 'google',
+        provider_user_id: profile.providerId,
+      });
+      sessionServiceMock.create.mockResolvedValueOnce({ rawToken: 'raw-token', sessionId: 'session-1' });
+      jwtServiceMock.sign.mockReturnValueOnce('jwt');
+
+      const result = await service.handleOAuthLogin(profile);
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
+    });
+
+    it('upgrades an email-provider account to Google on first OAuth login', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: profile.email,
+        auth_provider: 'email',
+        provider_user_id: null,
+      });
+      userRepositoryMock.save.mockResolvedValueOnce({
+        id: 'user-1',
+        email: profile.email,
+        full_name: profile.full_name,
+        avatar_url: profile.avatar_url,
+        auth_provider: 'google',
+        provider_user_id: profile.providerId,
+      });
+      sessionServiceMock.create.mockResolvedValueOnce({ rawToken: 'raw-token', sessionId: 'session-1' });
+      jwtServiceMock.sign.mockReturnValueOnce('jwt');
+
+      const result = await service.handleOAuthLogin(profile);
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(userRepositoryMock.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws 400 when profile has no email', async () => {
+      await expect(service.handleOAuthLogin({ ...profile, email: '' })).rejects.toThrow(CustomHttpException);
+    });
+
+    it('throws CONFLICT when Google providerId does not match stored account', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: profile.email,
+        auth_provider: 'google',
+        provider_user_id: 'different-google-id',
+      });
+
+      await expect(service.handleOAuthLogin(profile)).rejects.toThrow(CustomHttpException);
     });
   });
 });
