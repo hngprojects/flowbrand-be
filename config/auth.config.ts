@@ -7,7 +7,7 @@ export default registerAs('auth', () => ({
   google: {
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     clientID: process.env.GOOGLE_CLIENT_ID,
-    callbackURL: process.env.GOOGLE_REDIRECT_URI,
+    callbackURL: `${process.env.BASE_URL}/api/v1/auth/google/callback`,
   },
   redis: {
     host: process.env.REDIS_HOST,
@@ -15,4 +15,6 @@ export default registerAs('auth', () => ({
     password: process.env.REDIS_PASSWORD,
     username: process.env.REDIS_USERNAME,
   },
+  // Base URL to redirect users to after OAuth login (frontend application)
+  frontendUrl: process.env.FRONTEND_URL || '',
 }));
