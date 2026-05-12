@@ -7,7 +7,7 @@ export default registerAs('auth', () => ({
   google: {
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     clientID: process.env.GOOGLE_CLIENT_ID,
-    callbackURL: process.env.GOOGLE_REDIRECT_URI,
+    callbackURL: `${process.env.BASE_URL}/api/v1/auth/google/callback`,
   },
   redis: {
     host: process.env.REDIS_HOST,

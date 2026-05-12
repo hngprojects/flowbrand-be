@@ -36,6 +36,10 @@ export class ResponseInterceptor implements NestInterceptor {
   responseHandler(res: unknown, context: ExecutionContext) {
     const ctx = context.switchToHttp();
     const response = ctx.getResponse();
+
+    // Skip when response was already committed (e.g. OAuth redirect via @Res())
+    if (response.headersSent) return res;
+
     const status_code = response.statusCode;
     response.setHeader('Content-Type', 'application/json');
     if (res && typeof res === 'object' && !Array.isArray(res)) {
