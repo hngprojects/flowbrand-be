@@ -3,14 +3,13 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { randomInt } from 'crypto';
 import authConfig from '@config/auth.config';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
-import { UserSession } from './entities/user-session.entity';
+import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 import { RedisService } from '@modules/redis/services/redis.service';
 import { AuthMetadata } from './entities/auth-metadata.entity';
 import QueueService from '@modules/email/queue.service';
@@ -34,18 +33,18 @@ export default class AuthenticationService {
     private readonly queueService: QueueService,
     private readonly lockoutService: LockoutService,
     private readonly sessionService: SessionService,
-
-    @InjectRepository(UserSession)
-    private readonly userSessionRepository: Repository<UserSession>,
-
     @InjectRepository(AuthMetadata)
     private readonly authMetaData: Repository<AuthMetadata>,
-
-    private readonly dataSource: DataSource,
-  ) { }
+    private readonly dataSource: DataSource
+  ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
-    const existing = await this.userRepository.findOne({ where: { email: createUserDto.email } });
+    // Normalize email: trim whitespace and convert to lowercase
+    // NOTE: This is a workaround until the email column is migrated to PostgreSQL citext
+    // for case-insensitive uniqueness enforcement at the database level.
+    const email = createUserDto.email.trim().toLowerCase();
+
+    const existing = await this.userRepository.findOne({ where: { email } });
     if (existing) {
       throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_EXIST, HttpStatus.BAD_REQUEST);
     }
@@ -87,7 +86,7 @@ export default class AuthenticationService {
       const statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
 
       if (err.name === 'QueryFailedError') {
-        errorMessage = 'Database error occurred during registration';
+        errorMessage = SYS_MSG.DB_ERROR_REGISTRATION;
         this.logger.error('DB_ERROR during registration', err);
       }
 
@@ -120,9 +119,12 @@ export default class AuthenticationService {
     };
   }
 
-  async loginUser(loginDto: LoginDto): Promise<object> {
-    const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
+  async loginUser(loginDto: LoginDto) {
+    // Normalize email: trim whitespace and convert to lowercase
+    // Matches normalization performed during user creation and OAuth login
+    const email = loginDto.email.trim().toLowerCase();
 
+    const user = await this.userRepository.findOne({ where: { email } });
     if (!user || !user.password) {
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
@@ -144,24 +146,16 @@ export default class AuthenticationService {
     }
 
     await this.lockoutService.clear(meta);
-    const { rawToken, sessionId } = await this.sessionService.create(user);
-
-    const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
-    const access_token = this.jwtService.sign({ sub: user.id, id: user.id, email: user.email, sid: sessionId });
+    const auth = await this.buildAuthPayload(user);
 
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.LOGIN_SUCCESSFUL,
+      refresh_token: auth.refresh_token,
       data: {
-        access_token,
-        refresh_token: rawToken,
-        expires_at: new Date(Date.now() + jwtExpirySeconds * 1000).toISOString(),
-        user: {
-          id: user.id,
-          full_name: user.full_name,
-          email: user.email,
-          avatar_url: user.avatar_url,
-        },
+        access_token: auth.access_token,
+        expires_at: auth.expires_at,
+        user: auth.user,
       },
     };
   }
@@ -239,28 +233,16 @@ export default class AuthenticationService {
       this.redisService.del(`limit:${email}`),
     ]);
 
-    const { rawToken, sessionId } = await this.sessionService.create(user);
-
-    const access_token = this.jwtService.sign({
-      id: user.id,
-      sub: user.id,
-      sid: sessionId,
-      email: user.email,
-    });
+    const auth = await this.buildAuthPayload(user);
 
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.EMAIL_VERIFIED,
+      refresh_token: auth.refresh_token,
       data: {
-        access_token,
-        refresh_token: rawToken,
-        user: {
-          id: user.id,
-          full_name: user.full_name,
-          email: user.email,
-          avatar_url: user.avatar_url,
-          is_verified: true,
-        },
+        access_token: auth.access_token,
+        expires_at: auth.expires_at,
+        user: { ...auth.user, is_verified: true },
       },
     };
   }
@@ -280,6 +262,74 @@ export default class AuthenticationService {
     return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
   }
 
+  async handleOAuthLogin(profile: GoogleOAuthProfile): Promise<OAuthLoginResponse> {
+    const email = profile.email?.trim().toLowerCase();
+
+    if (!email) {
+      throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_NO_EMAIL, HttpStatus.BAD_REQUEST);
+    }
+
+    const existing = await this.userRepository.findOne({ where: { email } });
+    let user = existing;
+
+    if (user) {
+      if (user.auth_provider === 'google' && user.provider_user_id && user.provider_user_id !== profile.providerId) {
+        throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_LINK_CONFLICT, HttpStatus.CONFLICT);
+      }
+
+      if (user.auth_provider === 'email' || !user.provider_user_id) {
+        user.auth_provider = 'google';
+        user.provider_user_id = profile.providerId;
+        user.full_name = profile.full_name;
+        user.avatar_url = profile.avatar_url;
+        user = await this.userRepository.save(user);
+      }
+    } else {
+      user = await this.userRepository.save(
+        this.userRepository.create({
+          email,
+          full_name: profile.full_name,
+          avatar_url: profile.avatar_url,
+          password: null,
+          country: null,
+          auth_provider: 'google',
+          provider_user_id: profile.providerId,
+        })
+      );
+    }
+
+    if (!user) {
+      throw new CustomHttpException(SYS_MSG.USER_OAUTH_CREATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    const auth = await this.buildAuthPayload(user);
+
+    return {
+      status_code: HttpStatus.OK,
+      message: SYS_MSG.OAUTH_LOGIN_SUCCESSFUL,
+      access_token: auth.access_token,
+      refresh_token: auth.refresh_token,
+      data: { user: auth.user },
+    };
+  }
+
+  private async buildAuthPayload(user: User): Promise<{
+    access_token: string;
+    refresh_token: string;
+    expires_at: string;
+    user: { id: string; full_name: string; email: string; avatar_url: string | null };
+  }> {
+    const { rawToken, sessionId } = await this.sessionService.create(user);
+    const jwtExpirySeconds = +(authConfig().jwtExpiry ?? 3600);
+    const access_token = this.jwtService.sign({ sub: user.id, id: user.id, email: user.email, sid: sessionId });
+    return {
+      access_token,
+      refresh_token: rawToken,
+      expires_at: new Date(Date.now() + jwtExpirySeconds * 1000).toISOString(),
+      user: { id: user.id, full_name: user.full_name, email: user.email, avatar_url: user.avatar_url },
+    };
+  }
+
   // Generates a fresh OTP, stores the bcrypt hash in Redis, and queues the email.
   // The plaintext OTP is never persisted to the database.
   private async issueOtp(email: string): Promise<void> {
@@ -294,6 +344,8 @@ export default class AuthenticationService {
   }
 
   private generateOtp(): string {
-    return randomInt(0, 10 ** OTP_LENGTH).toString().padStart(OTP_LENGTH, '0');
+    return Math.floor(Math.random() * 10 ** OTP_LENGTH)
+      .toString()
+      .padStart(OTP_LENGTH, '0');
   }
 }
