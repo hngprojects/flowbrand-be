@@ -6,6 +6,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger } from 'nestjs-pino';
 import { DataSource } from 'typeorm';
+import cookieParser = require('cookie-parser');
 import { AppModule } from './app.module';
 import { initializeDataSource } from '@database/data-source';
 import { ResponseInterceptor } from '@shared/inteceptors/response.interceptor';
@@ -28,7 +29,11 @@ async function bootstrap() {
 
   app.enable('trust proxy');
   app.useLogger(logger);
-  app.enableCors();
+  app.use(cookieParser());
+  app.enableCors({
+    origin: process.env.FRONTEND_URL || true,
+    credentials: true,
+  });
   app.setGlobalPrefix('api/v1', { exclude: ['/', 'health', 'api', 'api/v1', 'api/docs', 'probe'] });
   app.useGlobalInterceptors(new ResponseInterceptor());
   app.useGlobalFilters(new HttpExceptionFilter());
